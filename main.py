@@ -4,9 +4,13 @@ import sys
 import json
 from urllib.parse import urlparse
 from dotenv import load_dotenv
+
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-from libresonic import Connection as LibresonicConnection
+import libsonic
+
+# Check for debug flag
+DEBUG_MODE = "--debug" in sys.argv
 
 load_dotenv()
 
@@ -38,7 +42,22 @@ def fetch_and_save_spotify_favorites():
             open_browser=True
         )
         sp = spotipy.Spotify(auth_manager=auth_manager)
-        print("✓ Spotify connection successful.")
+        
+        total_spotify_tracks = sp.current_user_saved_tracks(limit=1)['total']
+        print(f"✓ Spotify connection successful. Found {total_spotify_tracks} total liked songs.")
+
+        if os.path.exists(SPOTIFY_DATA_FILE):
+            try:
+                with open(SPOTIFY_DATA_FILE, 'r', encoding='utf-8') as f:
+                    local_data = json.load(f)
+                if len(local_data) == total_spotify_tracks:
+                    print(f"✓ Local cache '{SPOTIFY_DATA_FILE}' is up to date. Skipping download.")
+                    return local_data
+                else:
+                    print(f"-> Local cache is outdated (Local: {len(local_data)}, Spotify: {total_spotify_tracks}). Refetching...")
+            except json.JSONDecodeError:
+                print("-> Local cache file is corrupted. Refetching...")
+
     except Exception as e:
         print(f"❌ Could not connect to Spotify. Error: {e}")
         sys.exit(1)
@@ -64,10 +83,10 @@ def fetch_and_save_spotify_favorites():
                 })
         
         offset += limit
-        print(f"   Fetched {len(all_favorites)} songs so far...")
+        print(f"   Fetched {len(all_favorites)}/{total_spotify_tracks} songs so far...", end='\r')
 
+    print(f"\n✓ Fetched a total of {len(all_favorites)} liked songs.")
     all_favorites.reverse()
-    print(f"✓ Found a total of {len(all_favorites)} liked songs.")
 
     with open(SPOTIFY_DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(all_favorites, f, ensure_ascii=False, indent=4)
@@ -78,30 +97,47 @@ def fetch_and_save_spotify_favorites():
 def run_sync_with_preview():
     print("\n--- STAGE 2: Analyzing and Syncing with Navidrome ---")
     
-    try:
-        with open(SPOTIFY_DATA_FILE, 'r', encoding='utf-8') as f:
-            spotify_songs = json.load(f)
-        print(f"✓ Loaded {len(spotify_songs)} songs from '{SPOTIFY_DATA_FILE}'")
-    except FileNotFoundError:
-        print(f"❌ Data file not found. Please run Stage 1 first.")
+    spotify_songs = fetch_and_save_spotify_favorites()
+    if not spotify_songs:
+        print("No songs to process. Exiting.")
         return
 
-    print("-> Connecting to Navidrome server...")
+    print("\n-> Connecting to Navidrome server...")
     try:
         parsed_url = urlparse(NAVIDROME_URL)
         
-        conn = LibresonicConnection(
-            baseUrl=parsed_url.hostname,
-            username=NAVIDROME_USER,
-            password=NAVIDROME_PASS,
-            port=parsed_url.port,
-            appName='SpotifySync',
-            secure=(parsed_url.scheme == 'https')
-        )
+        connection_params = {
+            'baseUrl': parsed_url.scheme + "://" + parsed_url.hostname,
+            'username': NAVIDROME_USER,
+            'password': NAVIDROME_PASS,
+            'appName': 'SpotifySync',
+            'serverPath': "/rest"
+        }
+        if parsed_url.port:
+            connection_params['port'] = parsed_url.port
+        
+        if DEBUG_MODE:
+            print("--- DEBUG: Connection Parameters ---")
+            print(f"   - baseUrl: {connection_params.get('baseUrl')}")
+            print(f"   - port: {connection_params.get('port')}")
+            print(f"   - username: {connection_params.get('username')}")
+            print("------------------------------------")
+            print("--> Attempting to create connection object...")
+
+        conn = libsonic.Connection(**connection_params)
+        
+        if DEBUG_MODE:
+            print("✓ Connection object created.")
+            print("--> Attempting to ping server...")
+
         conn.ping()
         print("✓ Navidrome connection successful.")
+
     except Exception as e:
         print(f"❌ Could not connect to Navidrome. Please check URL, user, and pass. Error: {e}")
+        if DEBUG_MODE:
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
 
     print("\n-> Starting analysis (Dry Run)...")
@@ -111,6 +147,7 @@ def run_sync_with_preview():
 
     for idx, song in enumerate(spotify_songs):
         print(f"   Analyzing [{idx+1}/{len(spotify_songs)}]: {song['artist']} - {song['title']}", end='\r')
+        sys.stdout.flush()
         
         search_query = f"{song['artist']} {song['title']}"
         search_result = conn.search3(query=search_query, songCount=1, songOffset=0)
@@ -126,7 +163,7 @@ def run_sync_with_preview():
         else:
             to_log_as_missing.append(song)
     
-    print("\n✓ Analysis complete.                 ")
+    print(f"\n✓ Analysis complete.                 ")
 
     print("\n--- PREVIEW OF CHANGES ---")
     print(f"\n{len(to_favorite)} songs will be NEWLY FAVORITED in Navidrome:")
@@ -164,7 +201,7 @@ def run_sync_with_preview():
     favorited_count = 0
     for song in to_favorite:
         try:
-            conn.star(s_id=song['id'])
+            conn.star(songId=song['id'])
             print(f"  ✓ Favorited: {song['artist']} - {song['title']}")
             favorited_count += 1
         except Exception as e:
@@ -190,5 +227,4 @@ def write_missing_csv(missing_songs_list):
     print(f"✓ Missing songs report saved to '{MISSING_SONGS_CSV}'")
 
 if __name__ == '__main__':
-    fetch_and_save_spotify_favorites()
     run_sync_with_preview()

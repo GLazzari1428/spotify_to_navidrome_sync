@@ -1,3 +1,3 @@
 spotipy
-libresonic
+py-sonic
 python-dotenv

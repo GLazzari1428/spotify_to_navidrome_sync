@@ -1,13 +1,12 @@
 import os
 import csv
 import sys
-from datetime import datetime
+import json
 from dotenv import load_dotenv
 
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import libsonic
-
 
 load_dotenv()
 
@@ -20,10 +19,14 @@ NAVIDROME_URL = os.getenv("NAVIDROME_URL")
 NAVIDROME_USER = os.getenv("NAVIDROME_USER")
 NAVIDROME_PASS = os.getenv("NAVIDROME_PASS")
 
-MISSING_SONGS_CSV = 'missing_in_navidrome.csv'
+if not os.path.exists('output'):
+    os.makedirs('output')
 
+SPOTIFY_DATA_FILE = 'output/spotify_favorites.json'
+MISSING_SONGS_CSV = 'output/missing_in_navidrome.csv'
 
-def get_spotify_favorites():
+def fetch_and_save_spotify_favorites():
+    print("--- STAGE 1: Fetching Songs from Spotify ---")
     print("-> Connecting to Spotify...")
     try:
         auth_manager = SpotifyOAuth(
@@ -32,7 +35,7 @@ def get_spotify_favorites():
             client_secret=SPOTIFY_CLIENT_SECRET,
             redirect_uri=SPOTIFY_REDIRECT_URI,
             username=SPOTIFY_USERNAME,
-            open_browser=True 
+            open_browser=True
         )
         sp = spotipy.Spotify(auth_manager=auth_manager)
         print("✓ Spotify connection successful.")
@@ -40,10 +43,10 @@ def get_spotify_favorites():
         print(f"❌ Could not connect to Spotify. Error: {e}")
         sys.exit(1)
 
-    print("-> Fetching all liked songs from Spotify (this may take a while)...")
+    print("-> Fetching all liked songs (this may take a while)...")
     all_favorites = []
     offset = 0
-    limit = 50 
+    limit = 50
 
     while True:
         results = sp.current_user_saved_tracks(limit=limit, offset=offset)
@@ -64,85 +67,125 @@ def get_spotify_favorites():
         print(f"   Fetched {len(all_favorites)} songs so far...")
 
     all_favorites.reverse()
-    print(f"✓ Found a total of {len(all_favorites)} liked songs on Spotify.")
+    print(f"✓ Found a total of {len(all_favorites)} liked songs.")
+
+    with open(SPOTIFY_DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(all_favorites, f, ensure_ascii=False, indent=4)
+    
+    print(f"✓ All Spotify favorites have been saved to '{SPOTIFY_DATA_FILE}'")
     return all_favorites
 
+def run_sync_with_preview():
+    print("\n--- STAGE 2: Analyzing and Syncing with Navidrome ---")
+    
+    try:
+        with open(SPOTIFY_DATA_FILE, 'r', encoding='utf-8') as f:
+            spotify_songs = json.load(f)
+        print(f"✓ Loaded {len(spotify_songs)} songs from '{SPOTIFY_DATA_FILE}'")
+    except FileNotFoundError:
+        print(f"❌ Data file not found. Please run Stage 1 first.")
+        return
 
-def connect_to_navidrome():
     print("-> Connecting to Navidrome server...")
     try:
-        base_url = NAVIDROME_URL.split('//')[1].split(':')[0]
-        port = NAVIDROME_URL.split(':')[-1] if ':' in NAVIDROME_URL.split('//')[1] else '80'
-        if 'https' in NAVIDROME_URL:
-            port = '443'
-        
         conn = libsonic.Connection(
-            baseUrl=base_url,
-            port=port,
+            baseUrl=NAVIDROME_URL,
             user=NAVIDROME_USER,
             password=NAVIDROME_PASS,
             appName='SpotifySync',
-            ssl=True if 'https' in NAVIDROME_URL else False
+            ssl=True if NAVIDROME_URL.startswith('https') else False
         )
         conn.ping()
         print("✓ Navidrome connection successful.")
-        return conn
     except Exception as e:
         print(f"❌ Could not connect to Navidrome. Please check URL, user, and pass. Error: {e}")
         sys.exit(1)
 
-def main():
-    spotify_songs = get_spotify_favorites()
-    if not spotify_songs:
-        print("No songs to process. Exiting.")
-        return
-
-    nd_conn = connect_to_navidrome()
-
-    print(f"-> Preparing CSV for missing songs: '{MISSING_SONGS_CSV}'")
-    csv_file = open(MISSING_SONGS_CSV, 'w', newline='', encoding='utf-8')
-    csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(['Title', 'Artist', 'Album', 'Date Added to Spotify'])
-    
-    missing_count = 0
-    favorited_count = 0
-    skipped_count = 0
-
-    print("\n--- Starting Sync Process ---\n")
+    print("\n-> Starting analysis (Dry Run)...")
+    to_favorite = []
+    to_skip = []
+    to_log_as_missing = []
 
     for idx, song in enumerate(spotify_songs):
-        print(f"[{idx+1}/{len(spotify_songs)}] Processing: {song['artist']} - {song['title']}")
+        print(f"   Analyzing [{idx+1}/{len(spotify_songs)}]: {song['artist']} - {song['title']}", end='\r')
+        
+        search_query = f"{song['artist']} {song['title']}"
+        search_result = conn.search3(query=search_query, songCount=1, songOffset=0)
 
-        try:
-            search_query = f"{song['artist']} {song['title']}"
-            search_result = nd_conn.search3(query=search_query, songCount=5)
-
-            if 'song' in search_result['searchResult3']:
-                navidrome_song = search_result['searchResult3']['song'][0]
-
-                if navidrome_song.get('starred'):
-                    print("   - Status: Found and already favorited. Skipping.")
-                    skipped_count += 1
-                else:
-                    print("   - Status: Found, not favorited. Favoriting now...")
-                    nd_conn.star(songId=navidrome_song['id'])
-                    print("   ✓ Successfully favorited in Navidrome.")
-                    favorited_count += 1
+        if 'song' in search_result['searchResult3']:
+            navidrome_song = search_result['searchResult3']['song'][0]
+            song_info = {'id': navidrome_song['id'], 'title': song['title'], 'artist': song['artist']}
+            
+            if navidrome_song.get('starred'):
+                to_skip.append(song_info)
             else:
-                print("   - Status: Song not found in Navidrome. Logging to CSV.")
-                csv_writer.writerow([song['title'], song['artist'], song['album'], song['added_at']])
-                missing_count += 1
+                to_favorite.append(song_info)
+        else:
+            to_log_as_missing.append(song)
+    
+    print("\n✓ Analysis complete.                 ")
 
+    print("\n--- PREVIEW OF CHANGES ---")
+    print(f"\n{len(to_favorite)} songs will be NEWLY FAVORITED in Navidrome:")
+    for song in to_favorite[:10]:
+        print(f"  + {song['artist']} - {song['title']}")
+    if len(to_favorite) > 10:
+        print(f"  ... and {len(to_favorite) - 10} more.")
+
+    print(f"\n{len(to_skip)} songs are ALREADY FAVORITED and will be skipped.")
+    
+    print(f"\n{len(to_log_as_missing)} songs are MISSING from your Navidrome library:")
+    for song in to_log_as_missing[:10]:
+        print(f"  - {song['artist']} - {song['title']}")
+    if len(to_log_as_missing) > 10:
+        print(f"  ... and {len(to_log_as_missing) - 10} more.")
+    
+    print("\n--------------------------")
+    
+    if not to_favorite:
+        print("\nNo new songs to favorite. All actions are complete.")
+        write_missing_csv(to_log_as_missing)
+        return
+
+    try:
+        confirm = input("Do you want to apply these changes? (yes/no): ")
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user.")
+        sys.exit()
+
+    if confirm.lower() not in ['y', 'yes']:
+        print("Operation cancelled. No changes have been made to Navidrome.")
+        return
+
+    print("\n-> Applying changes...")
+    favorited_count = 0
+    for song in to_favorite:
+        try:
+            conn.star(songId=song['id'])
+            print(f"  ✓ Favorited: {song['artist']} - {song['title']}")
+            favorited_count += 1
         except Exception as e:
-            print(f"   - ❌ An error occurred while processing this song: {e}")
+            print(f"  ❌ Failed to favorite {song['artist']} - {song['title']}. Error: {e}")
+    
+    write_missing_csv(to_log_as_missing)
 
-    csv_file.close()
     print("\n--- Sync Complete! ---")
-    print(f"New songs favorited in Navidrome: {favorited_count}")
-    print(f"Songs already favorited (skipped): {skipped_count}")
-    print(f"Songs not found in Navidrome library: {missing_count}")
-    if missing_count > 0:
-        print(f"✓ Details for missing songs have been saved to '{MISSING_SONGS_CSV}'")
+    print(f"Successfully favorited: {favorited_count} songs.")
+    print(f"Skipped (already favorited): {len(to_skip)} songs.")
+    if to_log_as_missing:
+        print(f"Missing from library: {len(to_log_as_missing)} songs. See '{MISSING_SONGS_CSV}' for details.")
+
+def write_missing_csv(missing_songs_list):
+    if not missing_songs_list:
+        return
+        
+    with open(MISSING_SONGS_CSV, 'w', newline='', encoding='utf-8') as csv_file:
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(['Title', 'Artist', 'Album', 'Date Added to Spotify'])
+        for song in missing_songs_list:
+             csv_writer.writerow([song['title'], song['artist'], song['album'], song['added_at']])
+    print(f"✓ Missing songs report saved to '{MISSING_SONGS_CSV}'")
 
 if __name__ == '__main__':
-    main()
+    fetch_and_save_spotify_favorites()
+    run_sync_with_preview()

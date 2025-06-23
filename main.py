@@ -9,10 +9,8 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import libsonic
 
-# Check for debug flag
 DEBUG_MODE = "--debug" in sys.argv
 
-# Load .env file and override existing environment variables
 load_dotenv(override=True)
 
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
@@ -28,7 +26,8 @@ if not os.path.exists('output'):
     os.makedirs('output')
 
 SPOTIFY_DATA_FILE = 'output/spotify_favorites.json'
-MISSING_SONGS_CSV = 'output/missing_in_navidrome.csv'
+MISSING_SONGS_CSV = 'output/missing_songs.csv'
+MISSING_ALBUMS_CSV = 'output/missing_albums.csv'
 
 def fetch_and_save_spotify_favorites():
     print("--- STAGE 1: Fetching Songs from Spotify ---")
@@ -168,7 +167,6 @@ def run_sync_with_preview():
 
     print("\n--- PREVIEW OF CHANGES ---")
     print(f"\n{len(to_favorite)} songs will be NEWLY FAVORITED in Navidrome:")
-    # Show the first 10 songs from the "to_favorite" list, which preserves the chronological order
     for song in to_favorite[:10]:
         print(f"  + {song['artist']} - {song['title']}")
     if len(to_favorite) > 10:
@@ -177,7 +175,6 @@ def run_sync_with_preview():
     print(f"\n{len(to_skip)} songs are ALREADY FAVORITED and will be skipped.")
     
     print(f"\n{len(to_log_as_missing)} songs are MISSING from your Navidrome library:")
-    # Show the first 10 songs from the "missing" list
     for song in to_log_as_missing[:10]:
         print(f"  - {song['artist']} - {song['title']}")
     if len(to_log_as_missing) > 10:
@@ -185,9 +182,13 @@ def run_sync_with_preview():
     
     print("\n--------------------------")
     
+    if not to_favorite and not to_log_as_missing:
+        print("\nEverything is up to date!")
+        return
+        
     if not to_favorite:
-        print("\nNo new songs to favorite. All actions are complete.")
-        write_missing_csv(to_log_as_missing)
+        print("\nNo new songs to favorite. Writing missing songs report.")
+        write_missing_reports(to_log_as_missing)
         return
 
     try:
@@ -204,21 +205,21 @@ def run_sync_with_preview():
     favorited_count = 0
     for song in to_favorite:
         try:
-            conn.star(songId=song['id'])
+            conn.star(sids=song['id'])
             print(f"  ✓ Favorited: {song['artist']} - {song['title']}")
             favorited_count += 1
         except Exception as e:
             print(f"  ❌ Failed to favorite {song['artist']} - {song['title']}. Error: {e}")
     
-    write_missing_csv(to_log_as_missing)
+    write_missing_reports(to_log_as_missing)
 
     print("\n--- Sync Complete! ---")
     print(f"Successfully favorited: {favorited_count} songs.")
     print(f"Skipped (already favorited): {len(to_skip)} songs.")
     if to_log_as_missing:
-        print(f"Missing from library: {len(to_log_as_missing)} songs. See '{MISSING_SONGS_CSV}' for details.")
+        print(f"Missing from library: {len(to_log_as_missing)} songs. See reports in 'output' folder for details.")
 
-def write_missing_csv(missing_songs_list):
+def write_missing_reports(missing_songs_list):
     if not missing_songs_list:
         return
         
@@ -228,6 +229,20 @@ def write_missing_csv(missing_songs_list):
         for song in missing_songs_list:
              csv_writer.writerow([song['title'], song['artist'], song['album'], song['added_at']])
     print(f"✓ Missing songs report saved to '{MISSING_SONGS_CSV}'")
+
+    missing_albums = {}
+    for song in missing_songs_list:
+        album_key = (song['artist'], song['album'])
+        if album_key not in missing_albums:
+            missing_albums[album_key] = True
+
+    with open(MISSING_ALBUMS_CSV, 'w', newline='', encoding='utf-8') as csv_file:
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(['Artist', 'Album'])
+        for artist, album in sorted(missing_albums.keys()):
+            csv_writer.writerow([artist, album])
+    print(f"✓ Missing albums report saved to '{MISSING_ALBUMS_CSV}'")
+
 
 if __name__ == '__main__':
     run_sync_with_preview()

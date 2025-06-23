@@ -12,7 +12,8 @@ import libsonic
 # Check for debug flag
 DEBUG_MODE = "--debug" in sys.argv
 
-load_dotenv()
+# Load .env file and override existing environment variables
+load_dotenv(override=True)
 
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
@@ -150,10 +151,10 @@ def run_sync_with_preview():
         sys.stdout.flush()
         
         search_query = f"{song['artist']} {song['title']}"
-        search_result = conn.search3(query=search_query, songCount=1, songOffset=0)
+        search_result = conn.search2(query=search_query, songCount=1, songOffset=0)
 
-        if 'song' in search_result['searchResult3']:
-            navidrome_song = search_result['searchResult3']['song'][0]
+        if 'song' in search_result['searchResult2']:
+            navidrome_song = search_result['searchResult2']['song'][0]
             song_info = {'id': navidrome_song['id'], 'title': song['title'], 'artist': song['artist']}
             
             if navidrome_song.get('starred'):
@@ -167,6 +168,7 @@ def run_sync_with_preview():
 
     print("\n--- PREVIEW OF CHANGES ---")
     print(f"\n{len(to_favorite)} songs will be NEWLY FAVORITED in Navidrome:")
+    # Show the first 10 songs from the "to_favorite" list, which preserves the chronological order
     for song in to_favorite[:10]:
         print(f"  + {song['artist']} - {song['title']}")
     if len(to_favorite) > 10:
@@ -175,6 +177,7 @@ def run_sync_with_preview():
     print(f"\n{len(to_skip)} songs are ALREADY FAVORITED and will be skipped.")
     
     print(f"\n{len(to_log_as_missing)} songs are MISSING from your Navidrome library:")
+    # Show the first 10 songs from the "missing" list
     for song in to_log_as_missing[:10]:
         print(f"  - {song['artist']} - {song['title']}")
     if len(to_log_as_missing) > 10:

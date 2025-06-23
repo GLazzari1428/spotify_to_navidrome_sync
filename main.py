@@ -2,6 +2,7 @@ import os
 import csv
 import sys
 import json
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 import spotipy
@@ -88,12 +89,15 @@ def run_sync_with_preview():
 
     print("-> Connecting to Navidrome server...")
     try:
+        parsed_url = urlparse(NAVIDROME_URL)
+        
         conn = libsonic.Connection(
-            baseUrl=NAVIDROME_URL,
-            user=NAVIDROME_USER,
+            baseUrl=parsed_url.hostname,
+            username=NAVIDROME_USER,
             password=NAVIDROME_PASS,
+            port=parsed_url.port,
             appName='SpotifySync',
-            ssl=True if NAVIDROME_URL.startswith('https') else False
+            ssl=(parsed_url.scheme == 'https')
         )
         conn.ping()
         print("✓ Navidrome connection successful.")

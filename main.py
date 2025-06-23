@@ -2,6 +2,7 @@ import os
 import csv
 import sys
 import json
+import argparse
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 
@@ -9,10 +10,18 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import libsonic
 
-# --- Debug Flags ---
-DEBUG_MODE = "--debug" in sys.argv
-VERBOSE_DEBUG_MODE = "--verbose-debug" in sys.argv
-FORCE_REFETCH = "--force" in sys.argv
+# --- Argument Parser ---
+parser = argparse.ArgumentParser(description="Sync Spotify favorites to Navidrome.")
+parser.add_argument("--debug", action="store_true", help="Enable basic debug output.")
+parser.add_argument("--verbose-debug", action="store_true", help="Enable verbose debug output.")
+parser.add_argument("--force", action="store_true", help="Force refetch of Spotify favorites, ignoring the local cache.")
+parser.add_argument("--ignore-genre", type=str, help="Comma-separated list of genres to ignore (e.g., 'funk,rock').")
+args = parser.parse_args()
+
+DEBUG_MODE = args.debug
+VERBOSE_DEBUG_MODE = args.verbose_debug
+FORCE_REFETCH = args.force
+IGNORED_GENRES = [genre.strip().lower() for genre in args.ignore_genre.split(',')] if args.ignore_genre else []
 
 def verbose_print(*args, **kwargs):
     if VERBOSE_DEBUG_MODE:
@@ -204,6 +213,26 @@ def run_sync_with_preview():
     
     print(f"\n✓ Analysis complete.                 ")
 
+    # --- Genre Filtering ---
+    filtered_missing = []
+    ignored_counts = {genre: {'songs': 0, 'albums': set()} for genre in IGNORED_GENRES}
+    if IGNORED_GENRES:
+        print(f"\n-> Filtering out ignored genres: {', '.join(IGNORED_GENRES)}")
+        for song in to_log_as_missing:
+            song_genres = [g.strip().lower() for g in song.get('genre', '').split(',')]
+            is_ignored = False
+            for ignored_genre in IGNORED_GENRES:
+                if any(ignored_genre in s_g for s_g in song_genres):
+                    ignored_counts[ignored_genre]['songs'] += 1
+                    ignored_counts[ignored_genre]['albums'].add((song['artist'], song['album']))
+                    is_ignored = True
+                    break # Found a match, no need to check other ignored genres for this song
+            if not is_ignored:
+                filtered_missing.append(song)
+    else:
+        filtered_missing = to_log_as_missing
+
+
     print("\n--- PREVIEW OF CHANGES ---")
     print(f"\n{len(to_favorite)} songs will be NEWLY FAVORITED in Navidrome:")
     for song in to_favorite[:10]:
@@ -213,21 +242,21 @@ def run_sync_with_preview():
 
     print(f"\n{len(to_skip)} songs are ALREADY FAVORITED and will be skipped.")
     
-    print(f"\n{len(to_log_as_missing)} songs are MISSING from your Navidrome library:")
-    for song in to_log_as_missing[:10]:
+    print(f"\n{len(filtered_missing)} songs are MISSING from your Navidrome library (after filtering):")
+    for song in filtered_missing[:10]:
         print(f"  - {song['artist']} - {song['title']}")
-    if len(to_log_as_missing) > 10:
-        print(f"  ... and {len(to_log_as_missing) - 10} more.")
+    if len(filtered_missing) > 10:
+        print(f"  ... and {len(filtered_missing) - 10} more.")
     
     print("\n--------------------------")
     
-    if not to_favorite and not to_log_as_missing:
+    if not to_favorite and not filtered_missing:
         print("\nEverything is up to date!")
         return
         
     if not to_favorite:
         print("\nNo new songs to favorite. Writing missing songs report.")
-        write_missing_reports(to_log_as_missing)
+        write_missing_reports(filtered_missing)
         return
 
     try:
@@ -250,17 +279,27 @@ def run_sync_with_preview():
         except Exception as e:
             print(f"  ❌ Failed to favorite {song['artist']} - {song['title']}. Error: {e}")
     
-    write_missing_reports(to_log_as_missing)
+    write_missing_reports(filtered_missing)
 
     print("\n--- Sync Complete! ---")
     print(f"Successfully favorited: {favorited_count} songs.")
     print(f"Skipped (already favorited): {len(to_skip)} songs.")
-    if to_log_as_missing:
-        print(f"Missing from library: {len(to_log_as_missing)} songs. See reports in 'output' folder for details.")
+    if filtered_missing:
+        print(f"Missing from library: {len(filtered_missing)} songs. See reports in 'output' folder for details.")
+    
+    if IGNORED_GENRES:
+        print("\n--- Ignored Genre Summary ---")
+        for genre, counts in ignored_counts.items():
+            if counts['songs'] > 0:
+                print(f"- '{genre}': Ignored {counts['songs']} songs across {len(counts['albums'])} unique albums.")
+
 
 def write_missing_reports(missing_songs_list):
     verbose_print("\n--- VERBOSE: Running write_missing_reports ---")
     if not missing_songs_list:
+        # Clear files if there are no missing songs
+        open(MISSING_SONGS_CSV, 'w').close()
+        open(MISSING_ALBUMS_CSV, 'w').close()
         return
         
     with open(MISSING_SONGS_CSV, 'w', newline='', encoding='utf-8') as csv_file:

@@ -1,3 +1,4 @@
 spotipy
 py-sonic
 python-dotenv
+Flask

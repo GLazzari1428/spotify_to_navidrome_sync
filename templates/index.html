@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotify Sync Control Panel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+        }
+        .btn-primary {
+            transition: background-color 0.2s;
+        }
+        .btn-primary:hover {
+            background-color: #1aa34a;
+        }
+        .form-input {
+            background-color: #282828;
+            border-color: #404040;
+        }
+    </style>
+</head>
+<body class="p-8">
+    <div class="max-w-4xl mx-auto">
+        <header class="text-center mb-10">
+            <h1 class="text-5xl font-bold text-white mb-2">Spotify to Navidrome</h1>
+            <p class="text-xl text-gray-400">Sync Utility</p>
+        </header>
+
+        <div class="bg-gray-800 p-8 rounded-xl shadow-2xl">
+            <form action="/run-sync" method="post">
+                <h2 class="text-2xl font-semibold text-white mb-6">Run a New Sync</h2>
+                
+                <div class="mb-6">
+                    <label for="sync_type" class="block mb-2 text-sm font-medium text-gray-300">Sync Type</label>
+                    <select id="sync_type" name="sync_type" class="form-input block w-full p-2.5 rounded-lg border focus:ring-green-500 focus:border-green-500">
+                        <option value="favorites" selected>Liked Songs (Favorites)</option>
+                        <option value="playlist">Spotify Playlist</option>
+                    </select>
+                </div>
+                
+                <div id="playlist_url_div" class="mb-6 hidden">
+                    <label for="playlist_url" class="block mb-2 text-sm font-medium text-gray-300">Spotify Playlist URL</label>
+                    <input type="url" id="playlist_url" name="playlist_url" class="form-input block w-full p-2.5 rounded-lg border focus:ring-green-500 focus:border-green-500" placeholder="https://open.spotify.com/playlist/...">
+                </div>
+
+                <div class="grid md:grid-cols-2 gap-6 mb-6">
+                    <div>
+                        <label for="ignore_artist" class="block mb-2 text-sm font-medium text-gray-300">Ignore Artists</label>
+                        <input type="text" id="ignore_artist" name="ignore_artist" class="form-input block w-full p-2.5 rounded-lg border focus:ring-green-500 focus:border-green-500" placeholder="e.g., Daft Punk, AC/DC">
+                    </div>
+                    <div>
+                        <label for="ignore_genre" class="block mb-2 text-sm font-medium text-gray-300">Ignore Genres</label>
+                        <input type="text" id="ignore_genre" name="ignore_genre" class="form-input block w-full p-2.5 rounded-lg border focus:ring-green-500 focus:border-green-500" placeholder="e.g., rock, pop">
+                    </div>
+                </div>
+
+                <div class="space-y-4 mb-6">
+                    <div class="flex items-center">
+                        <input id="force_refetch" name="force_refetch" type="checkbox" value="true" class="w-4 h-4 text-green-600 bg-gray-700 border-gray-600 rounded focus:ring-green-600 ring-offset-gray-800 focus:ring-2">
+                        <label for="force_refetch" class="ml-3 text-sm font-medium text-gray-300">Force refetch from Spotify (ignore cache)</label>
+                    </div>
+                    <div class="flex items-center">
+                        <input id="debug" name="debug" type="checkbox" value="true" class="w-4 h-4 text-blue-500 bg-gray-700 border-gray-600 rounded focus:ring-blue-600 ring-offset-gray-800 focus:ring-2">
+                        <label for="debug" class="ml-3 text-sm font-medium text-gray-300">Enable basic debug output</label>
+                    </div>
+                    <div class="flex items-center">
+                        <input id="verbose_debug" name="verbose_debug" type="checkbox" value="true" class="w-4 h-4 text-purple-500 bg-gray-700 border-gray-600 rounded focus:ring-purple-600 ring-offset-gray-800 focus:ring-2">
+                        <label for="verbose_debug" class="ml-3 text-sm font-medium text-gray-300">Enable verbose debug output</label>
+                    </div>
+                </div>
+
+                <div class="text-center mt-8">
+                    <button type="submit" class="btn-primary bg-[#1DB954] text-white font-bold py-3 px-8 rounded-full text-lg">
+                        Run Sync & Generate Report
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <div class="text-center mt-8">
+            <a href="/report" class="text-green-400 hover:text-green-300 text-lg">View Latest Report</a>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('sync_type').addEventListener('change', function() {
+            const playlistDiv = document.getElementById('playlist_url_div');
+            if (this.value === 'playlist') {
+                playlistDiv.classList.remove('hidden');
+            } else {
+                playlistDiv.classList.add('hidden');
+            }
+        });
+    </script>
+</body>
+</html>

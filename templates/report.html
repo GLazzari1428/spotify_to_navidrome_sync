@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Missing Albums Report</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #e0e0e0; }
+        .album-grid { grid-template-columns: repeat(var(--grid-cols, 6), minmax(0, 1fr)); }
+        .album-card { transition: transform 0.2s ease, box-shadow 0.2s ease; border: 2px solid #333; }
+        .album-card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4); }
+        .album-card.selected { border-color: #1DB954; }
+        .btn { transition: background-color 0.2s, color 0.2s; }
+        .btn-primary:hover { background-color: #1aa34a; }
+        .btn-secondary:hover { background-color: #444; }
+        .btn-danger:hover { background-color: #c53030; }
+    </style>
+</head>
+<body class="p-4 md:p-6">
+    <div class="max-w-screen-2xl mx-auto">
+        <header class="text-center mb-6">
+            <h1 class="text-4xl font-bold text-white">Missing Albums Report</h1>
+            <a href="/" class="text-green-500 hover:text-green-400">← Back to Sync Control Panel</a>
+        </header>
+
+        <div class="flex flex-wrap gap-4 items-center justify-between bg-gray-800 p-4 rounded-lg mb-6 sticky top-4 z-10 shadow-lg">
+            <div class="relative">
+                <button id="genre-filter-btn" class="btn bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-md flex items-center gap-2">
+                    <i class="fas fa-music"></i> Filter by Genre <span id="genre-count" class="bg-green-600 text-xs font-bold rounded-full px-2 py-0.5">0</span>
+                </button>
+                <div id="genre-dropdown" class="hidden absolute top-full left-0 mt-2 bg-gray-900 border border-gray-700 rounded-lg shadow-xl w-64 h-80 overflow-y-auto p-4">
+                    <input type="text" id="genre-search" class="w-full bg-gray-800 border border-gray-600 rounded-md px-3 py-1.5 mb-2" placeholder="Search genres...">
+                    <div id="genre-list" class="flex flex-col gap-2"></div>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2 text-sm">
+                    <i class="fas fa-th-large"></i>
+                    <input type="range" id="grid-size-slider" min="2" max="10" value="6" class="w-32">
+                    <i class="fas fa-th"></i>
+                </div>
+                <div class="flex rounded-md bg-gray-700">
+                    <button id="grid-view-btn" class="btn bg-gray-600 px-3 py-1.5 rounded-l-md"><i class="fas fa-grip-vertical"></i> Grid</button>
+                    <button id="list-view-btn" class="btn px-3 py-1.5 rounded-r-md"><i class="fas fa-list"></i> List</button>
+                </div>
+            </div>
+        </div>
+
+        <main id="album-container" class="album-grid grid gap-5"></main>
+        <div id="loading" class="text-center py-20 text-xl">Loading albums...</div>
+
+        <footer id="actions-footer" class="sticky-footer p-4 rounded-lg text-center shadow-lg transition-transform duration-300 translate-y-full">
+            <div class="flex items-center justify-center gap-4">
+                <span id="selected-count" class="font-bold text-lg">0 selected</span>
+                <button id="export-btn" class="btn btn-primary bg-green-600 text-white font-bold py-2 px-5 rounded-full">Export as CSV</button>
+                <button id="download-btn" class="btn btn-secondary bg-gray-600 text-white font-bold py-2 px-5 rounded-full" disabled>Download (WIP)</button>
+                <button id="delete-btn" class="btn btn-danger bg-red-600 text-white font-bold py-2 px-5 rounded-full">Delete Selected</button>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        let allAlbums = [];
+        let selectedGenres = new Set();
+        let selectedAlbums = new Set();
+
+        const albumContainer = document.getElementById('album-container');
+        const loadingIndicator = document.getElementById('loading');
+        const genreFilterBtn = document.getElementById('genre-filter-btn');
+        const genreDropdown = document.getElementById('genre-dropdown');
+        const genreList = document.getElementById('genre-list');
+        const genreSearch = document.getElementById('genre-search');
+        const genreCount = document.getElementById('genre-count');
+        const gridViewBtn = document.getElementById('grid-view-btn');
+        const listViewBtn = document.getElementById('list-view-btn');
+        const gridSizeSlider = document.getElementById('grid-size-slider');
+        const actionsFooter = document.getElementById('actions-footer');
+        const selectedCountSpan = document.getElementById('selected-count');
+        const exportBtn = document.getElementById('export-btn');
+        const deleteBtn = document.getElementById('delete-btn');
+
+        // --- View Logic ---
+        function renderAlbums() {
+            let filteredAlbums = allAlbums;
+            if (selectedGenres.size > 0) {
+                filteredAlbums = allAlbums.filter(album => {
+                    const albumGenres = album.genre.toLowerCase().split(', ');
+                    return albumGenres.some(g => selectedGenres.has(g));
+                });
+            }
+
+            albumContainer.innerHTML = '';
+            if (filteredAlbums.length === 0) {
+                albumContainer.innerHTML = `<p class="col-span-full text-center text-xl mt-10">No albums match your filter.</p>`;
+                return;
+            }
+
+            filteredAlbums.forEach(album => {
+                const isSelected = selectedAlbums.has(album.url);
+                const cardHtml = albumContainer.classList.contains('album-grid')
+                    ? createGridCard(album, isSelected)
+                    : createListRow(album, isSelected);
+                albumContainer.insertAdjacentHTML('beforeend', cardHtml);
+            });
+        }
+
+        function createGridCard(album, isSelected) {
+            return `
+                <div class="album-card bg-gray-800 rounded-lg overflow-hidden shadow-lg p-3 flex flex-col ${isSelected ? 'selected' : ''}" data-url="${album.url}">
+                    <img src="${album.image_url}" alt="Cover for ${album.album}" class="w-full h-auto object-cover rounded-md mb-3 aspect-square" loading="lazy">
+                    <div class="mt-auto text-center">
+                        <h3 class="font-bold text-white text-sm truncate" title="${album.album}">${album.album}</h3>
+                        <p class="text-xs text-gray-400 truncate" title="${album.artist}">${album.artist}</p>
+                    </div>
+                    <div class="grid grid-cols-3 gap-1 mt-2">
+                        <a href="${album.url}" target="_blank" class="btn btn-secondary text-xs p-1 rounded-md text-center"><i class="fab fa-spotify"></i></a>
+                        <button class="btn btn-secondary text-xs p-1 rounded-md copy-name-btn"><i class="fas fa-copy"></i></button>
+                        <button class="btn btn-danger text-xs p-1 rounded-md delete-single-btn"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>`;
+        }
+
+        function createListRow(album, isSelected) {
+            return `
+                <div class="album-card w-full bg-gray-800 rounded-lg shadow-lg p-2 flex items-center gap-4 ${isSelected ? 'selected' : ''}" data-url="${album.url}">
+                    <img src="${album.image_url}" alt="Cover for ${album.album}" class="w-16 h-16 object-cover rounded-md" loading="lazy">
+                    <div class="flex-grow">
+                        <h3 class="font-bold text-white truncate" title="${album.album}">${album.album}</h3>
+                        <p class="text-sm text-gray-400 truncate" title="${album.artist}">${album.artist}</p>
+                        <p class="text-xs text-gray-500 truncate" title="${album.genre}">${album.genre || 'N/A'}</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <a href="${album.url}" target="_blank" class="btn btn-secondary p-2 rounded-full"><i class="fab fa-spotify"></i></a>
+                        <button class="btn btn-secondary p-2 rounded-full copy-name-btn"><i class="fas fa-copy"></i></button>
+                        <button class="btn btn-danger p-2 rounded-full delete-single-btn"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>`;
+        }
+
+        // --- Filter Logic ---
+        function populateGenreFilter() {
+            const genres = new Set();
+            allAlbums.forEach(album => {
+                album.genre.split(', ').forEach(g => {
+                    if(g) genres.add(g.toLowerCase());
+                });
+            });
+            
+            genreList.innerHTML = '';
+            [...genres].sort().forEach(genre => {
+                const genreId = `genre-${genre.replace(/\s+/g, '-')}`;
+                genreList.innerHTML += `
+                    <label for="${genreId}" class="flex items-center gap-2 text-sm cursor-pointer hover:text-white">
+                        <input type="checkbox" id="${genreId}" value="${genre}" class="w-4 h-4 text-green-600 bg-gray-700 border-gray-600 rounded focus:ring-green-600">
+                        <span class="capitalize">${genre}</span>
+                    </label>`;
+            });
+        }
+
+        genreList.addEventListener('change', e => {
+            if(e.target.type === 'checkbox') {
+                if(e.target.checked) {
+                    selectedGenres.add(e.target.value);
+                } else {
+                    selectedGenres.delete(e.target.value);
+                }
+                genreCount.textContent = selectedGenres.size;
+                renderAlbums();
+            }
+        });
+
+        genreSearch.addEventListener('input', () => {
+            const searchTerm = genreSearch.value.toLowerCase();
+            document.querySelectorAll('#genre-list label').forEach(label => {
+                const genreName = label.textContent.trim().toLowerCase();
+                label.style.display = genreName.includes(searchTerm) ? 'flex' : 'none';
+            });
+        });
+
+        // --- Event Listeners ---
+        genreFilterBtn.addEventListener('click', () => genreDropdown.classList.toggle('hidden'));
+        document.addEventListener('click', (e) => {
+            if (!genreFilterBtn.contains(e.target) && !genreDropdown.contains(e.target)) {
+                genreDropdown.classList.add('hidden');
+            }
+        });
+
+        gridViewBtn.addEventListener('click', () => {
+            albumContainer.className = 'album-grid grid gap-5';
+            gridViewBtn.classList.add('bg-gray-600');
+            listViewBtn.classList.remove('bg-gray-600');
+            renderAlbums();
+        });
+
+        listViewBtn.addEventListener('click', () => {
+            albumContainer.className = 'album-list flex flex-col gap-2';
+            listViewBtn.classList.add('bg-gray-600');
+            gridViewBtn.classList.remove('bg-gray-600');
+            renderAlbums();
+        });
+
+        gridSizeSlider.addEventListener('input', () => {
+            albumContainer.style.setProperty('--grid-cols', gridSizeSlider.value);
+        });
+
+        albumContainer.addEventListener('click', e => {
+            const card = e.target.closest('.album-card');
+            if (e.target.closest('.btn')) return; // Ignore clicks on buttons inside the card
+            if (card) {
+                card.classList.toggle('selected');
+                const url = card.dataset.url;
+                if (selectedAlbums.has(url)) {
+                    selectedAlbums.delete(url);
+                } else {
+                    selectedAlbums.add(url);
+                }
+                updateActionsFooter();
+            }
+        });
+
+        albumContainer.addEventListener('click', e => {
+            const copyBtn = e.target.closest('.copy-name-btn');
+            if (copyBtn) {
+                const card = copyBtn.closest('.album-card');
+                const albumData = allAlbums.find(a => a.url === card.dataset.url);
+                navigator.clipboard.writeText(`${albumData.artist} - ${albumData.album}`);
+            }
+
+            const deleteBtn = e.target.closest('.delete-single-btn');
+            if (deleteBtn) {
+                const card = deleteBtn.closest('.album-card');
+                if (confirm(`Are you sure you want to delete "${card.querySelector('h3').textContent}" from the missing list?`)) {
+                    handleDelete([card.dataset.url]);
+                }
+            }
+        });
+
+        // --- Actions Footer Logic ---
+        function updateActionsFooter() {
+            const count = selectedAlbums.size;
+            selectedCountSpan.textContent = `${count} selected`;
+            actionsFooter.style.transform = count > 0 ? 'translateY(0)' : 'translateY(100%)';
+        }
+
+        exportBtn.addEventListener('click', handleExport);
+        deleteBtn.addEventListener('click', () => {
+            if(confirm(`Are you sure you want to delete ${selectedAlbums.size} selected albums from the missing list?`)) {
+                handleDelete([...selectedAlbums]);
+            }
+        });
+
+        async function handleExport() {
+            const response = await fetch('/export-selected', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ album_urls: [...selectedAlbums] })
+            });
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = 'missing_albums_selected.csv';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+
+        async function handleDelete(urlsToDelete) {
+            await fetch('/api/delete-albums', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ album_urls: urlsToDelete })
+            });
+            // Refresh data from server
+            loadInitialData();
+        }
+
+        // --- Initial Load ---
+        async function loadInitialData() {
+            loadingIndicator.style.display = 'block';
+            albumContainer.innerHTML = '';
+            selectedAlbums.clear();
+            updateActionsFooter();
+
+            const response = await fetch('/api/albums');
+            const data = await response.json();
+            allAlbums = data;
+
+            loadingIndicator.style.display = 'none';
+            populateGenreFilter();
+            renderAlbums();
+        }
+        
+        loadInitialData();
+    });
+    </script>
+</body>
+</html>

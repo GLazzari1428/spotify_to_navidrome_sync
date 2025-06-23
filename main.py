@@ -4,10 +4,9 @@ import sys
 import json
 from urllib.parse import urlparse
 from dotenv import load_dotenv
-
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-import libsonic
+from libresonic import Connection as LibresonicConnection
 
 load_dotenv()
 
@@ -91,13 +90,13 @@ def run_sync_with_preview():
     try:
         parsed_url = urlparse(NAVIDROME_URL)
         
-        conn = libsonic.Connection(
+        conn = LibresonicConnection(
             baseUrl=parsed_url.hostname,
             username=NAVIDROME_USER,
             password=NAVIDROME_PASS,
             port=parsed_url.port,
             appName='SpotifySync',
-            ssl=(parsed_url.scheme == 'https')
+            secure=(parsed_url.scheme == 'https')
         )
         conn.ping()
         print("✓ Navidrome connection successful.")
@@ -165,7 +164,7 @@ def run_sync_with_preview():
     favorited_count = 0
     for song in to_favorite:
         try:
-            conn.star(songId=song['id'])
+            conn.star(s_id=song['id'])
             print(f"  ✓ Favorited: {song['artist']} - {song['title']}")
             favorited_count += 1
         except Exception as e:

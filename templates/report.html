@@ -8,15 +8,17 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #e0e0e0; }
+        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #e0e0e0; padding-bottom: 100px; /* Space for fixed footer */ }
         .album-grid { grid-template-columns: repeat(var(--grid-cols, 6), minmax(0, 1fr)); }
         .album-card { transition: transform 0.2s ease, box-shadow 0.2s ease; border: 2px solid #333; }
         .album-card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4); }
         .album-card.selected { border-color: #1DB954; }
-        .btn { transition: background-color 0.2s, color 0.2s; }
-        .btn-primary:hover { background-color: #1aa34a; }
-        .btn-secondary:hover { background-color: #444; }
-        .btn-danger:hover { background-color: #c53030; }
+        .btn { transition: background-color 0.2s, color 0.2s, opacity 0.2s; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary:hover:not(:disabled) { background-color: #1aa34a; }
+        .btn-secondary:hover:not(:disabled) { background-color: #444; }
+        .btn-danger:hover:not(:disabled) { background-color: #c53030; }
+        .fixed-footer { position: fixed; bottom: 0; left: 0; right: 0; backdrop-filter: blur(10px); background-color: rgba(24, 24, 24, 0.9); z-index: 50; }
     </style>
 </head>
 <body class="p-4 md:p-6">
@@ -26,17 +28,17 @@
             <a href="/" class="text-green-500 hover:text-green-400">← Back to Sync Control Panel</a>
         </header>
 
+        <!-- Controls -->
         <div class="flex flex-wrap gap-4 items-center justify-between bg-gray-800 p-4 rounded-lg mb-6 sticky top-4 z-10 shadow-lg">
             <div class="relative">
                 <button id="genre-filter-btn" class="btn bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-md flex items-center gap-2">
-                    <i class="fas fa-music"></i> Filter by Genre <span id="genre-count" class="bg-green-600 text-xs font-bold rounded-full px-2 py-0.5">0</span>
+                    <i class="fas fa-music"></i> Filter by Genre <span id="genre-count-badge" class="bg-green-600 text-xs font-bold rounded-full px-2 py-0.5">0</span>
                 </button>
                 <div id="genre-dropdown" class="hidden absolute top-full left-0 mt-2 bg-gray-900 border border-gray-700 rounded-lg shadow-xl w-64 h-80 overflow-y-auto p-4">
                     <input type="text" id="genre-search" class="w-full bg-gray-800 border border-gray-600 rounded-md px-3 py-1.5 mb-2" placeholder="Search genres...">
                     <div id="genre-list" class="flex flex-col gap-2"></div>
                 </div>
             </div>
-
             <div class="flex items-center gap-4">
                 <div class="flex items-center gap-2 text-sm">
                     <i class="fas fa-th-large"></i>
@@ -53,9 +55,10 @@
         <main id="album-container" class="album-grid grid gap-5"></main>
         <div id="loading" class="text-center py-20 text-xl">Loading albums...</div>
 
-        <footer id="actions-footer" class="sticky-footer p-4 rounded-lg text-center shadow-lg transition-transform duration-300 translate-y-full">
+        <!-- Fixed Footer for Actions -->
+        <footer id="actions-footer" class="fixed-footer p-4 text-center shadow-lg border-t border-gray-700">
             <div class="flex items-center justify-center gap-4">
-                <span id="selected-count" class="font-bold text-lg">0 selected</span>
+                <span id="selected-count" class="font-bold text-lg text-white">0 selected</span>
                 <button id="export-btn" class="btn btn-primary bg-green-600 text-white font-bold py-2 px-5 rounded-full">Export as CSV</button>
                 <button id="download-btn" class="btn btn-secondary bg-gray-600 text-white font-bold py-2 px-5 rounded-full" disabled>Download (WIP)</button>
                 <button id="delete-btn" class="btn btn-danger bg-red-600 text-white font-bold py-2 px-5 rounded-full">Delete Selected</button>
@@ -75,7 +78,7 @@
         const genreDropdown = document.getElementById('genre-dropdown');
         const genreList = document.getElementById('genre-list');
         const genreSearch = document.getElementById('genre-search');
-        const genreCount = document.getElementById('genre-count');
+        const genreCountBadge = document.getElementById('genre-count-badge');
         const gridViewBtn = document.getElementById('grid-view-btn');
         const listViewBtn = document.getElementById('list-view-btn');
         const gridSizeSlider = document.getElementById('grid-size-slider');
@@ -84,7 +87,6 @@
         const exportBtn = document.getElementById('export-btn');
         const deleteBtn = document.getElementById('delete-btn');
 
-        // --- View Logic ---
         function renderAlbums() {
             let filteredAlbums = allAlbums;
             if (selectedGenres.size > 0) {
@@ -95,6 +97,10 @@
             }
 
             albumContainer.innerHTML = '';
+            if (allAlbums.length === 0) {
+                 albumContainer.innerHTML = `<p class="col-span-full text-center text-xl mt-10">No missing albums found!</p>`;
+                 return;
+            }
             if (filteredAlbums.length === 0) {
                 albumContainer.innerHTML = `<p class="col-span-full text-center text-xl mt-10">No albums match your filter.</p>`;
                 return;
@@ -102,9 +108,7 @@
 
             filteredAlbums.forEach(album => {
                 const isSelected = selectedAlbums.has(album.url);
-                const cardHtml = albumContainer.classList.contains('album-grid')
-                    ? createGridCard(album, isSelected)
-                    : createListRow(album, isSelected);
+                const cardHtml = albumContainer.classList.contains('album-grid') ? createGridCard(album, isSelected) : createListRow(album, isSelected);
                 albumContainer.insertAdjacentHTML('beforeend', cardHtml);
             });
         }
@@ -142,34 +146,30 @@
                 </div>`;
         }
 
-        // --- Filter Logic ---
-        function populateGenreFilter() {
-            const genres = new Set();
-            allAlbums.forEach(album => {
-                album.genre.split(', ').forEach(g => {
-                    if(g) genres.add(g.toLowerCase());
-                });
-            });
+        function populateGenreFilter(genreCounts) {
+            const sortedGenres = Object.entries(genreCounts).sort((a, b) => a[0].localeCompare(b[0]));
             
             genreList.innerHTML = '';
-            [...genres].sort().forEach(genre => {
-                const genreId = `genre-${genre.replace(/\s+/g, '-')}`;
+            sortedGenres.forEach(([genre, count]) => {
+                const genreId = `genre-${genre.replace(/[^a-zA-Z0-9]/g, '-')}`;
                 genreList.innerHTML += `
-                    <label for="${genreId}" class="flex items-center gap-2 text-sm cursor-pointer hover:text-white">
-                        <input type="checkbox" id="${genreId}" value="${genre}" class="w-4 h-4 text-green-600 bg-gray-700 border-gray-600 rounded focus:ring-green-600">
-                        <span class="capitalize">${genre}</span>
+                    <label for="${genreId}" class="flex items-center justify-between text-sm cursor-pointer hover:bg-gray-700 p-1 rounded-md">
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox" id="${genreId}" value="${genre}" class="w-4 h-4 text-green-600 bg-gray-700 border-gray-600 rounded focus:ring-green-600">
+                            <span class="capitalize">${genre} (${count})</span>
+                        </div>
                     </label>`;
             });
         }
 
         genreList.addEventListener('change', e => {
-            if(e.target.type === 'checkbox') {
-                if(e.target.checked) {
+            if (e.target.type === 'checkbox') {
+                if (e.target.checked) {
                     selectedGenres.add(e.target.value);
                 } else {
                     selectedGenres.delete(e.target.value);
                 }
-                genreCount.textContent = selectedGenres.size;
+                genreCountBadge.textContent = selectedGenres.size;
                 renderAlbums();
             }
         });
@@ -182,7 +182,6 @@
             });
         });
 
-        // --- Event Listeners ---
         genreFilterBtn.addEventListener('click', () => genreDropdown.classList.toggle('hidden'));
         document.addEventListener('click', (e) => {
             if (!genreFilterBtn.contains(e.target) && !genreDropdown.contains(e.target)) {
@@ -210,7 +209,7 @@
 
         albumContainer.addEventListener('click', e => {
             const card = e.target.closest('.album-card');
-            if (e.target.closest('.btn')) return; // Ignore clicks on buttons inside the card
+            if (e.target.closest('.btn')) return;
             if (card) {
                 card.classList.toggle('selected');
                 const url = card.dataset.url;
@@ -240,16 +239,22 @@
             }
         });
 
-        // --- Actions Footer Logic ---
         function updateActionsFooter() {
             const count = selectedAlbums.size;
             selectedCountSpan.textContent = `${count} selected`;
-            actionsFooter.style.transform = count > 0 ? 'translateY(0)' : 'translateY(100%)';
+            
+            const shouldBeEnabled = count > 0;
+            exportBtn.disabled = !shouldBeEnabled;
+            deleteBtn.disabled = !shouldBeEnabled;
+            [exportBtn, deleteBtn].forEach(btn => {
+                btn.classList.toggle('opacity-50', !shouldBeEnabled);
+                btn.classList.toggle('cursor-not-allowed', !shouldBeEnabled);
+            });
         }
 
         exportBtn.addEventListener('click', handleExport);
         deleteBtn.addEventListener('click', () => {
-            if(confirm(`Are you sure you want to delete ${selectedAlbums.size} selected albums from the missing list?`)) {
+            if (confirm(`Are you sure you want to delete ${selectedAlbums.size} selected albums from the missing list?`)) {
                 handleDelete([...selectedAlbums]);
             }
         });
@@ -277,11 +282,9 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ album_urls: urlsToDelete })
             });
-            // Refresh data from server
             loadInitialData();
         }
 
-        // --- Initial Load ---
         async function loadInitialData() {
             loadingIndicator.style.display = 'block';
             albumContainer.innerHTML = '';
@@ -290,10 +293,11 @@
 
             const response = await fetch('/api/albums');
             const data = await response.json();
-            allAlbums = data;
+            allAlbums = data.albums;
+            const genreCounts = data.genre_counts;
 
             loadingIndicator.style.display = 'none';
-            populateGenreFilter();
+            populateGenreFilter(genreCounts);
             renderAlbums();
         }
         

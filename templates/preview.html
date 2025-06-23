@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirm Sync Changes</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #e0e0e0; }
+        .btn-primary:hover { background-color: #1aa34a; }
+        .btn-danger:hover { background-color: #c53030; }
+        .change-list { max-height: 300px; }
+        .action-header { display: flex; align-items: center; gap: 0.75rem; }
+        .action-checkbox { width: 1.25rem; height: 1.25rem; accent-color: #1DB954; }
+    </style>
+</head>
+<body class="p-8">
+    <div class="max-w-4xl mx-auto">
+        <header class="text-center mb-10">
+            <h1 class="text-4xl font-bold text-white mb-2">Confirm Sync Changes</h1>
+            <p class="text-lg text-gray-400">Review and select the changes to apply to Navidrome.</p>
+        </header>
+
+        <form action="/apply-changes" method="post">
+            <div class="bg-gray-800 p-8 rounded-xl shadow-2xl space-y-8">
+                <!-- Songs to Add -->
+                <div>
+                    <div class="action-header mb-3">
+                         <input type="checkbox" id="apply_add" name="apply_add" class="action-checkbox" checked>
+                         <label for="apply_add" class="text-2xl font-semibold text-white">
+                            Songs to ADD to '{{ sync_target_name }}' ({{ to_add|length }})
+                         </label>
+                    </div>
+                    {% if to_add %}
+                        <ul class="change-list overflow-y-auto bg-gray-900 p-4 rounded-lg space-y-2">
+                            {% for song in to_add %}
+                            <li class="text-green-400"><span class="font-bold">+</span> {{ song.artist }} - {{ song.title }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="text-gray-400">No songs to add.</p>
+                    {% endif %}
+                </div>
+
+                <!-- Songs to Remove -->
+                <div>
+                    <div class="action-header mb-3">
+                        <input type="checkbox" id="apply_remove" name="apply_remove" class="action-checkbox" checked>
+                        <label for="apply_remove" class="text-2xl font-semibold text-white">
+                             Songs to REMOVE from '{{ sync_target_name }}' ({{ to_remove|length }})
+                        </label>
+                    </div>
+                    {% if to_remove %}
+                        <ul class="change-list overflow-y-auto bg-gray-900 p-4 rounded-lg space-y-2">
+                            {% for song in to_remove %}
+                            <li class="text-red-400"><span class="font-bold">-</span> {{ song.artist }} - {{ song.title }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="text-gray-400">No songs to remove.</p>
+                    {% endif %}
+                </div>
+
+                <!-- Missing Songs Report -->
+                 <div>
+                    <div class="action-header mb-3">
+                        <input type="checkbox" id="generate_report" name="generate_report" class="action-checkbox" checked disabled>
+                        <label for="generate_report" class="text-2xl font-semibold text-white">
+                            Generate Missing Songs Report ({{ to_log_as_missing|length }} songs)
+                        </label>
+                    </div>
+                    <p class="text-gray-400">A report will be generated for songs found on Spotify but not in your Navidrome library. This action is always performed.</p>
+                </div>
+
+
+                <!-- Actions -->
+                <div class="flex items-center justify-center gap-6 pt-6 border-t border-gray-700">
+                    <button type="submit" class="btn btn-primary bg-green-600 text-white font-bold py-3 px-8 rounded-full text-lg">
+                        Confirm & Apply Selected
+                    </button>
+                    <a href="/" class="btn btn-danger bg-red-700 text-white font-bold py-3 px-8 rounded-full text-lg">
+                        Cancel
+                    </a>
+                </div>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

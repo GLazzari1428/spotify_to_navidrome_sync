@@ -10,24 +10,26 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import libsonic
 
-# --- Argument Parser ---
-parser = argparse.ArgumentParser(description="Sync Spotify favorites to Navidrome.")
+parser = argparse.ArgumentParser(description="Sync Spotify favorites or playlists to Navidrome.")
+parser.add_argument("--playlist", type=str, help="The URL of the Spotify playlist to sync.")
+parser.add_argument("--interactive", action="store_true", help="Review each change interactively before applying.")
+parser.add_argument("--force", action="store_true", help="Force refetch of Spotify data, ignoring the local cache.")
+parser.add_argument("--ignore-genre", type=str, help="Comma-separated list of genres to ignore in reports (e.g., 'funk,rock').")
+parser.add_argument("--ignore-artist", type=str, help="Comma-separated list of artists to ignore (e.g., 'Daft Punk,AC/DC').")
 parser.add_argument("--debug", action="store_true", help="Enable basic debug output.")
 parser.add_argument("--verbose-debug", action="store_true", help="Enable verbose debug output.")
-parser.add_argument("--force", action="store_true", help="Force refetch of Spotify favorites, ignoring the local cache.")
-parser.add_argument("--ignore-genre", type=str, help="Comma-separated list of genres to ignore (e.g., 'funk,rock').")
 args = parser.parse_args()
 
 DEBUG_MODE = args.debug
 VERBOSE_DEBUG_MODE = args.verbose_debug
 FORCE_REFETCH = args.force
 IGNORED_GENRES = [genre.strip().lower() for genre in args.ignore_genre.split(',')] if args.ignore_genre else []
+IGNORED_ARTISTS = [artist.strip().lower() for artist in args.ignore_artist.split(',')] if args.ignore_artist else []
 
 def verbose_print(*args, **kwargs):
     if VERBOSE_DEBUG_MODE:
         print(*args, **kwargs)
 
-# --- Configuration ---
 load_dotenv(override=True)
 
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
@@ -42,46 +44,47 @@ NAVIDROME_PASS = os.getenv("NAVIDROME_PASS")
 if not os.path.exists('output'):
     os.makedirs('output')
 
-SPOTIFY_DATA_FILE = 'output/spotify_favorites.json'
+FAVORITES_CACHE_FILE = 'output/spotify_favorites.json'
 MISSING_SONGS_CSV = 'output/missing_songs.csv'
 MISSING_ALBUMS_CSV = 'output/missing_albums.csv'
 
-def fetch_and_save_spotify_favorites():
-    verbose_print("\n--- VERBOSE: Running fetch_and_save_spotify_favorites ---")
-    print("--- STAGE 1: Fetching Songs from Spotify ---")
-    print("-> Connecting to Spotify...")
+def get_spotify_api():
     try:
         auth_manager = SpotifyOAuth(
-            scope="user-library-read",
+            scope="user-library-read playlist-read-private",
             client_id=SPOTIFY_CLIENT_ID,
             client_secret=SPOTIFY_CLIENT_SECRET,
             redirect_uri=SPOTIFY_REDIRECT_URI,
             username=SPOTIFY_USERNAME,
             open_browser=True
         )
-        sp = spotipy.Spotify(auth_manager=auth_manager)
-        
-        total_spotify_tracks = sp.current_user_saved_tracks(limit=1)['total']
-        print(f"✓ Spotify connection successful. Found {total_spotify_tracks} total liked songs.")
-
-        if FORCE_REFETCH:
-            print("-> --force flag detected. Forcing a full refetch from Spotify.")
-        elif os.path.exists(SPOTIFY_DATA_FILE):
-            try:
-                with open(SPOTIFY_DATA_FILE, 'r', encoding='utf-8') as f:
-                    local_data = json.load(f)
-                
-                if local_data and 'genre' in local_data[0] and 'album_url' in local_data[0] and len(local_data) == total_spotify_tracks:
-                    print(f"✓ Local cache '{SPOTIFY_DATA_FILE}' is up to date and has the correct format. Skipping download.")
-                    return local_data
-                else:
-                    print(f"-> Local cache is outdated or in an old format. Refetching to get new data (Genres/URLs)...")
-            except (json.JSONDecodeError, IndexError):
-                print("-> Local cache file is corrupted or empty. Refetching...")
-
+        return spotipy.Spotify(auth_manager=auth_manager)
     except Exception as e:
         print(f"❌ Could not connect to Spotify. Error: {e}")
         sys.exit(1)
+
+def fetch_spotify_data(sp, playlist_url=None):
+    verbose_print("\n--- VERBOSE: Running fetch_spotify_data ---")
+    if playlist_url:
+        return fetch_playlist_tracks(sp, playlist_url)
+    else:
+        return fetch_liked_songs(sp)
+
+def fetch_liked_songs(sp):
+    print("--- STAGE 1: Fetching Liked Songs from Spotify ---")
+    total_spotify_tracks = sp.current_user_saved_tracks(limit=1)['total']
+    print(f"✓ Spotify connection successful. Found {total_spotify_tracks} total liked songs.")
+
+    cache_file = FAVORITES_CACHE_FILE
+    if not FORCE_REFETCH and os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                local_data = json.load(f)
+            if local_data and 'genre' in local_data[0] and len(local_data) == total_spotify_tracks:
+                print(f"✓ Local cache '{cache_file}' is up to date. Skipping download.")
+                return local_data, "Favorites"
+        except (json.JSONDecodeError, IndexError):
+            print("-> Local cache file is corrupted or empty. Refetching...")
 
     print("-> Fetching all liked songs (this may take a while)...")
     all_tracks_raw = []
@@ -95,9 +98,39 @@ def fetch_and_save_spotify_favorites():
         offset += limit
         print(f"   Fetched {len(all_tracks_raw)}/{total_spotify_tracks} songs so far...", end='\r')
     
-    if VERBOSE_DEBUG_MODE and all_tracks_raw:
-        verbose_print(f"\n--- VERBOSE: First raw track item:\n{json.dumps(all_tracks_raw[0], indent=2)}")
+    processed_tracks = process_raw_tracks(sp, all_tracks_raw)
+    with open(cache_file, 'w', encoding='utf-8') as f:
+        json.dump(processed_tracks, f, ensure_ascii=False, indent=4)
+    print(f"\n✓ All Spotify favorites have been saved to '{cache_file}'")
+    return processed_tracks, "Favorites"
 
+def fetch_playlist_tracks(sp, playlist_url):
+    print(f"--- STAGE 1: Fetching Playlist from Spotify ---")
+    playlist_id = playlist_url.split('/')[-1].split('?')[0]
+    try:
+        playlist_info = sp.playlist(playlist_id, fields="name,tracks.total")
+        playlist_name = playlist_info['name']
+        total_playlist_tracks = playlist_info['tracks']['total']
+        print(f"✓ Successfully found playlist '{playlist_name}' with {total_playlist_tracks} tracks.")
+    except Exception as e:
+        print(f"❌ Could not fetch playlist info. Is the URL correct? Error: {e}")
+        sys.exit(1)
+        
+    print("-> Fetching all playlist tracks (this may take a while)...")
+    all_tracks_raw = []
+    offset = 0
+    while True:
+        results = sp.playlist_items(playlist_id, limit=100, offset=offset)
+        if not results['items']:
+            break
+        all_tracks_raw.extend(results['items'])
+        offset += 100
+        print(f"   Fetched {len(all_tracks_raw)}/{total_playlist_tracks} songs so far...", end='\r')
+
+    processed_tracks = process_raw_tracks(sp, all_tracks_raw)
+    return processed_tracks, playlist_name
+
+def process_raw_tracks(sp, all_tracks_raw):
     print(f"\n-> Fetching artist genres...")
     artist_ids = {item['track']['artists'][0]['id'] for item in all_tracks_raw if item.get('track') and item['track']['artists']}
     artist_genres_map = {}
@@ -108,75 +141,35 @@ def fetch_and_save_spotify_favorites():
         for artist in artists_details['artists']:
             artist_genres_map[artist['id']] = ", ".join(artist['genres']) if artist['genres'] else ''
     
-    if VERBOSE_DEBUG_MODE and artist_genres_map:
-         verbose_print(f"--- VERBOSE: Sample of genre map:\n{dict(list(artist_genres_map.items())[:3])}")
-
     print("-> Processing and saving track data...")
-    all_favorites = []
+    processed_tracks = []
     for item in all_tracks_raw:
-        track = item['track']
+        track = item.get('track')
         if track and track.get('album') and track.get('artists'):
             artist_id = track['artists'][0]['id']
-            all_favorites.append({
+            processed_tracks.append({
+                'id': track['id'],
                 'title': track['name'],
                 'artist': track['artists'][0]['name'],
                 'album': track['album']['name'],
                 'album_type': track['album'].get('album_type', 'album'),
                 'album_url': track['album'].get('external_urls', {}).get('spotify', ''),
                 'genre': artist_genres_map.get(artist_id, ''),
-                'added_at': item['added_at']
+                'added_at': item.get('added_at', '')
             })
+    return processed_tracks
 
-    if VERBOSE_DEBUG_MODE and all_favorites:
-        verbose_print(f"--- VERBOSE: First processed favorite object:\n{json.dumps(all_favorites[-1], indent=2)}")
-
-    all_favorites.reverse()
-    with open(SPOTIFY_DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(all_favorites, f, ensure_ascii=False, indent=4)
-    
-    print(f"✓ All Spotify favorites have been saved to '{SPOTIFY_DATA_FILE}'")
-    return all_favorites
-
-def run_sync_with_preview():
-    verbose_print("\n--- VERBOSE: Running run_sync_with_preview ---")
-    print("\n--- STAGE 2: Analyzing and Syncing with Navidrome ---")
-    
-    spotify_songs = fetch_and_save_spotify_favorites()
-    if not spotify_songs:
-        print("No songs to process. Exiting.")
-        return
-
+def get_navidrome_connection():
     print("\n-> Connecting to Navidrome server...")
     try:
         parsed_url = urlparse(NAVIDROME_URL)
-        
-        connection_params = {
-            'baseUrl': parsed_url.scheme + "://" + parsed_url.hostname,
-            'username': NAVIDROME_USER,
-            'password': NAVIDROME_PASS,
-            'appName': 'SpotifySync',
-            'serverPath': "/rest"
-        }
+        connection_params = {'baseUrl': parsed_url.scheme + "://" + parsed_url.hostname,'username': NAVIDROME_USER,'password': NAVIDROME_PASS,'appName': 'SpotifySync','serverPath': "/rest"}
         if parsed_url.port:
             connection_params['port'] = parsed_url.port
-        
-        if DEBUG_MODE:
-            print("--- DEBUG: Connection Parameters ---")
-            print(f"   - baseUrl: {connection_params.get('baseUrl')}")
-            print(f"   - port: {connection_params.get('port')}")
-            print(f"   - username: {connection_params.get('username')}")
-            print("------------------------------------")
-            print("--> Attempting to create connection object...")
-
         conn = libsonic.Connection(**connection_params)
-        
-        if DEBUG_MODE:
-            print("✓ Connection object created.")
-            print("--> Attempting to ping server...")
-
         conn.ping()
         print("✓ Navidrome connection successful.")
-
+        return conn
     except Exception as e:
         print(f"❌ Could not connect to Navidrome. Please check URL, user, and pass. Error: {e}")
         if DEBUG_MODE or VERBOSE_DEBUG_MODE:
@@ -184,120 +177,185 @@ def run_sync_with_preview():
             traceback.print_exc()
         sys.exit(1)
 
+def interactive_session(to_add, to_remove):
+    print("\n--- Interactive Session ---")
+    approved_add = []
+    approved_remove = []
+
+    if to_add:
+        print("\n--- Songs to Add/Star ---")
+        for song in to_add:
+            action = input(f"  + {song['artist']} - {song['title']} | (A)dd, (S)kip, (I)gnore Artist, (Q)uit? ").lower()
+            if action == 'a':
+                approved_add.append(song)
+            elif action == 's':
+                continue
+            elif action == 'i':
+                artist_to_ignore = song['artist'].lower()
+                if artist_to_ignore not in IGNORED_ARTISTS:
+                    IGNORED_ARTISTS.append(artist_to_ignore)
+                print(f"    -> Ignoring '{song['artist']}' for the rest of this session.")
+            elif action == 'q':
+                break
+    
+    if to_remove:
+        print("\n--- Songs to Remove/Unstar ---")
+        for song in to_remove:
+            action = input(f"  - {song['artist']} - {song['title']} | (R)emove, (S)kip, (Q)uit? ").lower()
+            if action == 'r':
+                approved_remove.append(song)
+            elif action == 's':
+                continue
+            elif action == 'q':
+                break
+    
+    return approved_add, approved_remove
+
+def main():
+    sp = get_spotify_api()
+    spotify_tracks, sync_target_name = fetch_spotify_data(sp, args.playlist)
+    conn = get_navidrome_connection()
+    
+    to_add, to_remove, to_log_as_missing = [], [], []
+    
     print("\n-> Starting analysis (Dry Run)...")
-    to_favorite = []
-    to_skip = []
-    to_log_as_missing = []
+    
+    spotify_track_map = {f"{track['artist'].lower()}||{track['title'].lower()}": track for track in spotify_tracks}
 
-    for idx, song in enumerate(spotify_songs):
-        print(f"   Analyzing [{idx+1}/{len(spotify_songs)}]: {song['artist']} - {song['title']}", end='\r')
-        sys.stdout.flush()
+    if not args.playlist:
+        print("-> Comparing Spotify Liked Songs with Navidrome Stars...")
+        navidrome_starred = conn.getStarred()['starred'].get('song', [])
+        navidrome_track_map = {f"{track['artist'].lower()}||{track['title'].lower()}": track for track in navidrome_starred}
         
-        search_query = f"{song['artist']} {song['title']}"
-        search_result = conn.search2(query=search_query, songCount=1, songOffset=0)
+        for key, track in spotify_track_map.items():
+            if key not in navidrome_track_map:
+                to_add.append(track)
+        
+        for key, track in navidrome_track_map.items():
+            if key not in spotify_track_map:
+                to_remove.append(track)
+        
+        to_log_as_missing = to_add
 
-        if VERBOSE_DEBUG_MODE and idx < 3:
-            verbose_print(f"\n--- VERBOSE: Search Query: {search_query}")
-            verbose_print(f"--- VERBOSE: Search Result:\n{json.dumps(search_result, indent=2)}")
-
-        if 'song' in search_result['searchResult2']:
-            navidrome_song = search_result['searchResult2']['song'][0]
-            song_info = {'id': navidrome_song['id'], 'title': song['title'], 'artist': song['artist']}
-            
-            if navidrome_song.get('starred'):
-                to_skip.append(song_info)
+    else:
+        print(f"-> Comparing Spotify playlist '{sync_target_name}' with Navidrome library...")
+        navidrome_song_ids_to_add = []
+        for track in spotify_tracks:
+            search_result = conn.search2(query=f"{track['artist']} {track['title']}", songCount=1)['searchResult2']
+            if 'song' in search_result:
+                navidrome_song_ids_to_add.append(search_result['song'][0]['id'])
             else:
-                to_favorite.append(song_info)
-        else:
-            to_log_as_missing.append(song)
+                to_log_as_missing.append(track)
+        
+        to_add = navidrome_song_ids_to_add
     
     print(f"\n✓ Analysis complete.                 ")
-
-    # --- Genre Filtering ---
+    
     filtered_missing = []
-    ignored_counts = {genre: {'songs': 0, 'albums': set()} for genre in IGNORED_GENRES}
-    if IGNORED_GENRES:
-        print(f"\n-> Filtering out ignored genres: {', '.join(IGNORED_GENRES)}")
+    ignored_genre_counts = {genre: {'songs': 0, 'albums': set()} for genre in IGNORED_GENRES}
+    ignored_artist_counts = {artist: {'songs': 0, 'albums': set()} for artist in IGNORED_ARTISTS}
+
+    if IGNORED_GENRES or IGNORED_ARTISTS:
+        print(f"\n-> Applying filters to missing songs report...")
         for song in to_log_as_missing:
-            song_genres = [g.strip().lower() for g in song.get('genre', '').split(',')]
             is_ignored = False
-            for ignored_genre in IGNORED_GENRES:
-                if any(ignored_genre in s_g for s_g in song_genres):
-                    ignored_counts[ignored_genre]['songs'] += 1
-                    ignored_counts[ignored_genre]['albums'].add((song['artist'], song['album']))
-                    is_ignored = True
-                    break # Found a match, no need to check other ignored genres for this song
+            if song['artist'].lower() in [a.lower() for a in IGNORED_ARTISTS]:
+                ignored_artist_counts.setdefault(song['artist'].lower(), {'songs': 0, 'albums': set()})
+                ignored_artist_counts[song['artist'].lower()]['songs'] += 1
+                ignored_artist_counts[song['artist'].lower()]['albums'].add((song['artist'], song['album']))
+                is_ignored = True
+            
+            if not is_ignored and IGNORED_GENRES:
+                song_genres = [g.strip().lower() for g in song.get('genre', '').split(',')]
+                for ignored_genre in IGNORED_GENRES:
+                    if any(ignored_genre in s_g for s_g in song_genres):
+                        ignored_genre_counts[ignored_genre]['songs'] += 1
+                        ignored_genre_counts[ignored_genre]['albums'].add((song['artist'], song['album']))
+                        is_ignored = True
+                        break
+            
             if not is_ignored:
                 filtered_missing.append(song)
     else:
         filtered_missing = to_log_as_missing
 
+    approved_add, approved_remove = [], []
 
-    print("\n--- PREVIEW OF CHANGES ---")
-    print(f"\n{len(to_favorite)} songs will be NEWLY FAVORITED in Navidrome:")
-    for song in to_favorite[:10]:
-        print(f"  + {song['artist']} - {song['title']}")
-    if len(to_favorite) > 10:
-        print(f"  ... and {len(to_favorite) - 10} more.")
+    if args.interactive and not args.playlist:
+        approved_add, approved_remove = interactive_session(to_add, to_remove)
+    else:
+        print("\n--- PREVIEW OF CHANGES ---")
+        if args.playlist:
+             print(f"\n{len(to_add)} songs from Spotify will be synced to Navidrome playlist '{sync_target_name}'.")
+             print(f"{len(filtered_missing)} songs from the Spotify playlist were not found in your Navidrome library.")
+        else:
+            print(f"\n{len(to_add)} songs will be STARRED in Navidrome:")
+            for song in to_add[:10]: print(f"  + {song['artist']} - {song['title']}")
+            if len(to_add) > 10: print(f"  ... and {len(to_add) - 10} more.")
 
-    print(f"\n{len(to_skip)} songs are ALREADY FAVORITED and will be skipped.")
-    
-    print(f"\n{len(filtered_missing)} songs are MISSING from your Navidrome library (after filtering):")
-    for song in filtered_missing[:10]:
-        print(f"  - {song['artist']} - {song['title']}")
-    if len(filtered_missing) > 10:
-        print(f"  ... and {len(filtered_missing) - 10} more.")
-    
-    print("\n--------------------------")
-    
-    if not to_favorite and not filtered_missing:
-        print("\nEverything is up to date!")
-        return
+            print(f"\n{len(to_remove)} songs will be UNSTARRED from Navidrome:")
+            for song in to_remove[:10]: print(f"  - {song['artist']} - {song['title']}")
+            if len(to_remove) > 10: print(f"  ... and {len(to_remove) - 10} more.")
         
-    if not to_favorite:
-        print("\nNo new songs to favorite. Writing missing songs report.")
-        write_missing_reports(filtered_missing)
-        return
+        if not to_add and not to_remove:
+            print("\nEverything is up to date!")
+            write_missing_reports(filtered_missing)
+            return
 
-    try:
-        confirm = input("Do you want to apply these changes? (yes/no): ")
-    except KeyboardInterrupt:
-        print("\nOperation cancelled by user.")
-        sys.exit()
-
-    if confirm.lower() not in ['y', 'yes']:
-        print("Operation cancelled. No changes have been made to Navidrome.")
-        return
+        confirm = input("\nDo you want to apply these changes? (yes/no): ").lower()
+        if confirm in ['y', 'yes']:
+            approved_add, approved_remove = to_add, to_remove
+        else:
+            print("Operation cancelled. Reports for missing songs are still being generated.")
+            write_missing_reports(filtered_missing)
+            sys.exit()
 
     print("\n-> Applying changes...")
-    favorited_count = 0
-    for song in to_favorite:
-        try:
-            conn.star(sids=[song['id']])
-            print(f"  ✓ Favorited: {song['artist']} - {song['title']}")
-            favorited_count += 1
-        except Exception as e:
-            print(f"  ❌ Failed to favorite {song['artist']} - {song['title']}. Error: {e}")
-    
+    if args.playlist:
+        playlists = conn.getPlaylists()['playlists']['playlist']
+        target_playlist = next((p for p in playlists if p['name'] == sync_target_name), None)
+        if target_playlist:
+            print(f"-> Deleting existing Navidrome playlist '{sync_target_name}'...")
+            conn.deletePlaylist(pid=target_playlist['id'])
+        
+        print(f"-> Creating new playlist '{sync_target_name}' with {len(to_add)} songs...")
+        conn.createPlaylist(name=sync_target_name, songIds=to_add)
+        print("✓ Playlist sync complete.")
+
+    else: 
+        if approved_add:
+            add_ids = [s['id'] for s in approved_add]
+            conn.star(sids=add_ids)
+            print(f"✓ Starred {len(add_ids)} songs.")
+        if approved_remove:
+            remove_ids = [s['id'] for s in approved_remove]
+            conn.unstar(sids=remove_ids)
+            print(f"✓ Unstarred {len(remove_ids)} songs.")
+
     write_missing_reports(filtered_missing)
 
     print("\n--- Sync Complete! ---")
-    print(f"Successfully favorited: {favorited_count} songs.")
-    print(f"Skipped (already favorited): {len(to_skip)} songs.")
-    if filtered_missing:
-        print(f"Missing from library: {len(filtered_missing)} songs. See reports in 'output' folder for details.")
-    
+    if not args.playlist:
+        if approved_add:
+            print(f"Songs starred: {len(approved_add)}")
+        if approved_remove:
+            print(f"Songs unstarred: {len(approved_remove)}")
+        
     if IGNORED_GENRES:
         print("\n--- Ignored Genre Summary ---")
-        for genre, counts in ignored_counts.items():
+        for genre, counts in ignored_genre_counts.items():
             if counts['songs'] > 0:
                 print(f"- '{genre}': Ignored {counts['songs']} songs across {len(counts['albums'])} unique albums.")
-
+    
+    if IGNORED_ARTISTS:
+        print("\n--- Ignored Artist Summary ---")
+        for artist, counts in ignored_artist_counts.items():
+            if counts['songs'] > 0:
+                print(f"- '{artist.title()}': Ignored {counts['songs']} songs across {len(counts['albums'])} unique albums.")
 
 def write_missing_reports(missing_songs_list):
     verbose_print("\n--- VERBOSE: Running write_missing_reports ---")
     if not missing_songs_list:
-        # Clear files if there are no missing songs
         open(MISSING_SONGS_CSV, 'w').close()
         open(MISSING_ALBUMS_CSV, 'w').close()
         return
@@ -327,4 +385,4 @@ def write_missing_reports(missing_songs_list):
 
 
 if __name__ == '__main__':
-    run_sync_with_preview()
+    main()
